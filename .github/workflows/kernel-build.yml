@@ -118,7 +118,7 @@ jobs:
           remove-docker-images: 'true'
           remove-large-packages: 'true'
           remove-swapfile: 'true'
-          verbose: 'true'
+          verbose: 'false'
 
       - name: Checkout code
         uses: actions/checkout@v6
