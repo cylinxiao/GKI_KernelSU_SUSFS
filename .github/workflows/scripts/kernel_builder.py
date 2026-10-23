@@ -255,8 +255,23 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             ksu_dir = self.work_dir / "KernelSU"
             if ksu_dir.exists():
                 self._chdir(ksu_dir)
-                self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=False)
+                self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=True)
+                self._pin_ksu_version(ksu_dir)
                 self._chdir(self.work_dir)
+
+    def _pin_ksu_version(self, ksu_dir: Path):
+        # Kbuild 默认按 GitHub 上 main 分支的实时提交数/最新 tag 计算版本，
+        # 固定为当前 checkout 提交本身的值，使内核版本号与同提交的官方管理器一致
+        count = self._run_cmd("git rev-list --count HEAD", capture_output=True).stdout.strip()
+        tag = self._run_cmd("git describe --tags --abbrev=0", capture_output=True).stdout.strip().lstrip("v")
+        kbuild = ksu_dir / "kernel" / "Kbuild"
+        content = kbuild.read_text(encoding="utf-8")
+        content, n_count = re.subn(r'^LOCAL_COUNT\s*:=.*$', f'LOCAL_COUNT     := {count}', content, flags=re.M)
+        content, n_tag = re.subn(r'^VERSION_TAG\s*:=.*$', f'VERSION_TAG     := {tag}', content, flags=re.M)
+        if n_count != 1 or n_tag != 1:
+            raise RuntimeError(f"无法固定 KernelSU 版本: LOCAL_COUNT={n_count}, VERSION_TAG={n_tag}")
+        kbuild.write_text(content, encoding="utf-8")
+        logger.info(f"KernelSU 版本已固定: 提交数 {count}, tag v{tag}")
 
     def add_bbg(self):
         if not self.config.use_bbg:
