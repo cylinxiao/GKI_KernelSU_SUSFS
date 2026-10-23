@@ -322,6 +322,31 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         hooks_patch = self.sukisu_patch_dir / "69_hide_stuff.patch"
         if hooks_patch.exists():
             self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=False)
+            self._relocate_hide_stuff_block()
+
+    def _relocate_hide_stuff_block(self):
+        # 69_hide_stuff.patch 以旧版 SUSFS 的 bypass_orig_flow: 为锚点；SUSFS v2.3+ 去掉了该标签，
+        # 隐藏代码会以 fuzz 3 插进 OPEN_REDIRECT 块中间。将其移回 if (file) 块末尾（SUS_KSTAT 之后）
+        task_mmu = Path("fs/proc/task_mmu.c")
+        if not task_mmu.exists():
+            return
+        content = task_mmu.read_text(encoding="utf-8")
+        block_start = content.find("\t\tdentry = file->f_path.dentry;\n")
+        if block_start < 0:
+            return
+        block_end_marker = "goto bypass;\n            }\n        }\n"
+        block_end = content.find(block_end_marker, block_start)
+        anchor = ("\t\tsusfs_sus_kstat_spoof_show_map_vma(inode, &dev, &ino);\n"
+                  "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n")
+        if block_end < 0 or anchor not in content:
+            raise RuntimeError("无法定位 69_hide_stuff 隐藏代码块或 SUSFS 锚点")
+        block = content[block_start:block_end + len(block_end_marker)]
+        if content.find(anchor + block) >= 0:
+            return
+        content = content[:block_start] + content[block_start + len(block):]
+        content = content.replace(anchor, anchor + block, 1)
+        task_mmu.write_text(content, encoding="utf-8")
+        logger.info("已将 69_hide_stuff 隐藏代码移至 show_map_vma 的 SUS_KSTAT 处理之后")
 
     def apply_zram_patches(self):
         if not self.config.use_zram:
