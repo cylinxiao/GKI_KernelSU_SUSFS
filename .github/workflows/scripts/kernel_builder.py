@@ -260,18 +260,28 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 self._chdir(self.work_dir)
 
     def _pin_ksu_version(self, ksu_dir: Path):
-        # Kbuild 默认按 GitHub 上 main 分支的实时提交数/最新 tag 计算版本，
-        # 固定为当前 checkout 提交本身的值，使内核版本号与同提交的官方管理器一致
-        count = self._run_cmd("git rev-list --count HEAD", capture_output=True).stdout.strip()
-        tag = self._run_cmd("git describe --tags --abbrev=0", capture_output=True).stdout.strip().lstrip("v")
-        kbuild = ksu_dir / "kernel" / "Kbuild"
-        content = kbuild.read_text(encoding="utf-8")
+        # 内核构建文件默认按 GitHub 上 main 分支的实时提交数/最新 tag 计算版本，改为固定值：
+        # main 上的提交取其自身的提交数和 tag，使内核版本号与同提交的官方管理器一致；
+        # builtin 等分支沿用作者惯例，取 main 上最近 release tag 处的提交数和 tag
+        on_main = self._run_cmd("git merge-base --is-ancestor HEAD origin/main", check=False).returncode == 0
+        # main 上还有 manager-ci 等非版本 tag，只匹配 v 开头的版本 tag
+        describe = "git describe --tags --abbrev=0 --match 'v[0-9]*'"
+        ref = "HEAD" if on_main else self._run_cmd(
+            f"{describe} origin/main", capture_output=True).stdout.strip()
+        count = self._run_cmd(f"git rev-list --count {ref}", capture_output=True).stdout.strip()
+        tag = self._run_cmd(f"{describe} {ref}", capture_output=True).stdout.strip().lstrip("v")
+        candidates = [ksu_dir / "kernel" / name for name in ("Kbuild", "Makefile")]
+        build_file = next((f for f in candidates
+                           if f.exists() and re.search(r'^LOCAL_COUNT\s*:=', f.read_text(encoding="utf-8"), re.M)), None)
+        if build_file is None:
+            raise RuntimeError("未找到包含 LOCAL_COUNT 的 KernelSU 构建文件")
+        content = build_file.read_text(encoding="utf-8")
         content, n_count = re.subn(r'^LOCAL_COUNT\s*:=.*$', f'LOCAL_COUNT     := {count}', content, flags=re.M)
         content, n_tag = re.subn(r'^VERSION_TAG\s*:=.*$', f'VERSION_TAG     := {tag}', content, flags=re.M)
         if n_count != 1 or n_tag != 1:
             raise RuntimeError(f"无法固定 KernelSU 版本: LOCAL_COUNT={n_count}, VERSION_TAG={n_tag}")
-        kbuild.write_text(content, encoding="utf-8")
-        logger.info(f"KernelSU 版本已固定: 提交数 {count}, tag v{tag}")
+        build_file.write_text(content, encoding="utf-8")
+        logger.info(f"KernelSU 版本已固定: 提交数 {count}, tag v{tag} (来源 {ref}, 文件 {build_file.name})")
 
     def add_bbg(self):
         if not self.config.use_bbg:
