@@ -93,8 +93,9 @@ LEGACY_FIXES = {
     "android12-5.10-below-136": {"url": "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch", "min_sub_level": 136},
 }
 OP8E_PATCH_URL = "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c"
-KPM_PATCH_URL = "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
-KPIMG_URL = "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/kpimg"
+# 固定为 2026-03-15 的 patch_linux（内置 kpimg 0.13.0）。2026-10-18 起的版本忽略全部参数，
+# 只会注入一个 16 字节、版本号为 0 的空 kpimg，刷入后开机即死
+KPM_PATCH_URL = "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/547ae94b/kpm/patch_linux"
 
 
 @dataclass

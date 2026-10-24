@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
-                   LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL, KPIMG_URL)
+                   LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -690,11 +690,12 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if not image_dir.exists():
             return
         self._chdir(image_dir)
-        # patch_linux 自 2026-10 起不再内置 kpimg，不带参数运行会注入空 kpimg（开机即死）；
-        # 按官方管理器 KernelFlashState.kt 的用法单独下载 kpimg 并显式指定
-        self._run_cmd(f"curl -LSs {KPM_PATCH_URL} -o patch && curl -LSs {KPIMG_URL} -o kpimg && chmod 777 patch")
-        self._run_cmd("./patch -p -s 123 -i Image -k kpimg -o oImage")
-        if b"KernelPatch" not in (image_dir / "oImage").read_bytes():
+        # patch_linux 不解析参数：固定读取当前目录的 Image，输出 oImage。
+        # 注入空 kpimg 的镜像刷入后开机即死，因此检查 oImage 里确实带有 KernelPatch
+        self._run_cmd(f"curl -LSs {KPM_PATCH_URL} -o patch && chmod 777 patch")
+        self._run_cmd("./patch", check=False)
+        patched = image_dir / "oImage"
+        if not patched.exists() or b"KernelPatch" not in patched.read_bytes():
             raise RuntimeError("KPM 修补后的 Image 中没有 KernelPatch，kpimg 未注入")
         self._run_cmd("mv oImage Image")
 
