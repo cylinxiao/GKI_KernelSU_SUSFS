@@ -451,6 +451,49 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             with open(base_c, "w") as f:
                 f.write(content)
 
+    def apply_ns_inode_spoof(self):
+        # 让 app 进程(uid>=10000)通过 readlink /proc/<pid>/ns/mnt 读到固定的 mnt 命名空间 inode，
+        # 使主进程与 isolated 辅助进程比对结果一致(应对 Duck 的 isolated namespace drift 检测)。
+        # 只改 proc_ns_readlink 的输出字符串，不动内核真实命名空间，root(uid 0)读到的仍是真实值。
+        logger.info("=== 应用 ns inode 伪装补丁 ===")
+        f = self.work_dir / "common/fs/proc/namespaces.c"
+        if not f.exists():
+            raise RuntimeError("找不到 fs/proc/namespaces.c")
+        content = f.read_text(encoding="utf-8")
+        if "ns inode spoof" in content:
+            logger.info("ns inode 伪装补丁已存在，跳过")
+            return
+        old_block = (
+            "\tif (ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS)) {\n"
+            "\t\tres = ns_get_name(name, sizeof(name), task, ns_ops);\n"
+            "\t\tif (res >= 0)\n"
+            "\t\t\tres = readlink_copy(buffer, buflen, name);\n"
+            "\t}\n"
+        )
+        new_block = (
+            "\tif (ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS)) {\n"
+            "\t\tres = ns_get_name(name, sizeof(name), task, ns_ops);\n"
+            "\t\tif (res >= 0) {\n"
+            "\t\t\t/* ns inode spoof: apps (uid>=10000) see a constant mnt ns\n"
+            "\t\t\t * inode so main/isolated-process comparisons match */\n"
+            "\t\t\tif (from_kuid(&init_user_ns, current_uid()) >= 10000 &&\n"
+            "\t\t\t    strncmp(name, \"mnt:[\", 5) == 0)\n"
+            "\t\t\t\tsnprintf(name, sizeof(name), \"mnt:[%u]\", 4026535680u);\n"
+            "\t\t\tres = readlink_copy(buffer, buflen, name);\n"
+            "\t\t}\n"
+            "\t}\n"
+        )
+        if content.count(old_block) != 1:
+            raise RuntimeError(f"ns inode 补丁: 目标代码块匹配数={content.count(old_block)}")
+        content = content.replace(old_block, new_block, 1)
+        inc_old = "#include <linux/ptrace.h>\n"
+        inc_new = "#include <linux/ptrace.h>\n#include <linux/cred.h>\n"
+        if content.count(inc_old) != 1:
+            raise RuntimeError("ns inode 补丁: 未找到 ptrace.h include 锚点")
+        content = content.replace(inc_old, inc_new, 1)
+        f.write_text(content, encoding="utf-8")
+        logger.info("已应用 ns inode 伪装补丁 (mnt -> 4026535680)")
+
     def configure_kernel(self):
         logger.info("=== 配置内核 ===")
         self._chdir(self.work_dir)
@@ -798,6 +841,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self.apply_sukisu_patches()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
+            self.apply_ns_inode_spoof()
             self.configure_kernel()
             self.configure_kernel_name()
             self.show_kernel_config()
