@@ -1,0 +1,48 @@
+name: KPM Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe patch_linux kpimg handling
+        run: |
+          mkdir work && cd work
+          base=https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch
+          curl -LSs "$base/refs/heads/main/kpm/patch_linux" -o patch_new
+          curl -LSs "$base/refs/heads/main/kpm/kpimg" -o kpimg
+          curl -LSs "$base/547ae94b/kpm/patch_linux" -o patch_old
+          chmod +x patch_new patch_old
+          ls -l && sha256sum patch_new patch_old kpimg
+
+          curl -LSs -o gki.zip https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2024-01_r17.zip
+          unzip -o -q gki.zip
+          git clone -q --depth 1 -b main-kernel-build-2024 https://android.googlesource.com/platform/system/tools/mkbootimg
+          python3 mkbootimg/unpack_bootimg.py --boot_img boot-5.10.img --out unpacked > /dev/null
+          cp unpacked/kernel Image.stock
+
+          count() { [ -f "$1" ] && echo "$1: size=$(stat -c %s "$1") KernelPatch=$(grep -a -o KernelPatch "$1" | wc -l)" || echo "$1: missing"; }
+          show() { grep -aE "kpimg|patch done|error|\[-\]|usage" || true; }
+
+          echo "=== new: version / kpimg info"
+          ./patch_new -v 2>&1 | head -3 || true
+          ./patch_new -v -k kpimg 2>&1 | head -3 || true
+
+          echo "=== new: -p -s 123 -i Image -k kpimg -o o_args"
+          cp Image.stock Image && ./patch_new -p -s 123 -i Image -k kpimg -o o_args 2>&1 | show || true
+          count o_args
+
+          echo "=== new: long options with absolute kpimg path"
+          cp Image.stock Image && ./patch_new --patch --skey 123 --image Image --kpimg "$PWD/kpimg" --out o_long 2>&1 | show || true
+          count o_long
+
+          echo "=== new: no arguments, kpimg present in cwd"
+          rm -f oImage && cp Image.stock Image && ./patch_new 2>&1 | show || true
+          mv -f oImage o_noargs_kpimg 2>/dev/null || true
+          count o_noargs_kpimg
+
+          echo "=== old (547ae94b): no arguments"
+          mkdir old && cp Image.stock old/Image && cd old && ../patch_old 2>&1 | show || true
+          cd .. && count old/oImage
