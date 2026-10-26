@@ -1,0 +1,41 @@
+name: KPM Debug 515
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe patch_linux versions on android13-5.15.148 kernel
+        run: |
+          set -u
+          mkdir w && cd w
+          # 取 stock GKI android13-5.15-2024-05 (= 5.15.148) 的 boot，解出内核
+          for r in 1 2 3 4 5 6 7 8 9; do
+            code=$(curl -s -o gki.zip -w "%{http_code}" "https://dl.google.com/android/gki/gki-certified-boot-android13-5.15-2024-05_r$r.zip")
+            if [ "$code" = "200" ]; then echo "[+] got r$r"; break; fi
+          done
+          unzip -o -q gki.zip
+          ls -la *.img
+          git clone -q --depth 1 -b main-kernel-build-2024 https://android.googlesource.com/platform/system/tools/mkbootimg
+          IMG=$(ls boot*.img | head -1)
+          python3 mkbootimg/unpack_bootimg.py --boot_img "$IMG" --out out >/dev/null 2>&1
+          cp out/kernel Image.stock
+          echo "[+] stock kernel:"; ls -la Image.stock
+          strings Image.stock | grep -m1 "Linux version 5.15" || true
+
+          base=https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch
+          for ref in 547ae94b 7c6289c9 191febb8 1dface38 main; do
+            echo "===================== patch_linux @ $ref ====================="
+            curl -sLo patch "$base/$ref/kpm/patch_linux" && chmod +x patch
+            echo "tool size: $(stat -c%s patch)"
+            cp Image.stock Image
+            ./patch 2>&1 | grep -aE "kpimg version|no symbol|printk|can.t find|patch done|superkey|relocation|_printk" | head -25 || true
+            if [ -f oImage ]; then
+              echo ">>> oImage: size=$(stat -c%s oImage) KernelPatch=$(grep -a -o KernelPatch oImage | wc -l)"
+            else
+              echo ">>> no oImage produced"
+            fi
+            rm -f oImage patch
+          done
