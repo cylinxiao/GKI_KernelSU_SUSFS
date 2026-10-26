@@ -325,6 +325,41 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 self._chdir(common_dir)
                 self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=False)
                 self._chdir(self.work_dir)
+        self._ensure_namespace_susfs_includes()
+
+    def _ensure_namespace_susfs_includes(self):
+        # SUSFS 补丁 fs/namespace.c 的 Hunk #1(加 susfs_def.h include 等)在某些内核版本上
+        # 因上下文不含 <trace/hooks/blk.h> 而打不上(如 android13-5.15.148)，导致后续 hunk 引用
+        # 的 VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT / DEFAULT_KSU_MNT_ID / CL_COPY_MNT_NS /
+        # susfs_is_sdcard_android_data_not_decrypted 全部未定义。此处兜底补上 Hunk #1 的内容。
+        f = self.work_dir / "common/fs/namespace.c"
+        if not f.exists():
+            return
+        content = f.read_text(encoding="utf-8")
+        if "CONFIG_KSU_SUSFS" not in content:
+            return  # 没有 SUSFS 代码，无需处理
+        if "#include <linux/susfs_def.h>" in content:
+            return  # Hunk #1 已应用，跳过
+        anchor = '#include "internal.h"\n'
+        if content.count(anchor) != 1:
+            raise RuntimeError(f"namespace.c SUSFS include 兜底: 锚点匹配数={content.count(anchor)}")
+        blocks = (
+            '#include "internal.h"\n'
+            "\n"
+            "#ifdef CONFIG_KSU_SUSFS\n"
+            "#include <linux/susfs_def.h>\n"
+            "#endif // #ifdef CONFIG_KSU_SUSFS\n"
+            "\n"
+            "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+            "extern bool susfs_is_current_ksu_domain(void);\n"
+            "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n"
+            "\n"
+            "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n"
+            "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+        )
+        content = content.replace(anchor, blocks, 1)
+        f.write_text(content, encoding="utf-8")
+        logger.info("已兜底补上 fs/namespace.c 的 SUSFS include(Hunk #1)")
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
