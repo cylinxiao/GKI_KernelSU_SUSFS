@@ -7,7 +7,7 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     steps:
-      - name: Probe patch_linux versions on android13-5.15.148 kernel
+      - name: Probe SukiSU_KernelPatch_patch releases on android13-5.15.148 kernel
         run: |
           set -u
           mkdir w && cd w
@@ -17,25 +17,44 @@ jobs:
             if [ "$code" = "200" ]; then echo "[+] got r$r"; break; fi
           done
           unzip -o -q gki.zip
-          ls -la *.img
           git clone -q --depth 1 -b main-kernel-build-2024 https://android.googlesource.com/platform/system/tools/mkbootimg
-          IMG=$(ls boot*.img | head -1)
+          ls -la *.img
+          IMG=boot.img; [ -f "$IMG" ] || IMG=$(ls boot*.img | head -1)
           python3 mkbootimg/unpack_bootimg.py --boot_img "$IMG" --out out >/dev/null 2>&1
           cp out/kernel Image.stock
-          echo "[+] stock kernel:"; ls -la Image.stock
           strings Image.stock | grep -m1 "Linux version 5.15" || true
+          echo "stock sukisu strings: $(strings Image.stock | grep -ci sukisu)"
 
-          base=https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch
-          for ref in 547ae94b 7c6289c9 191febb8 1dface38 main; do
-            echo "===================== patch_linux @ $ref ====================="
-            curl -sLo patch "$base/$ref/kpm/patch_linux" && chmod +x patch
-            echo "tool size: $(stat -c%s patch)"
-            cp Image.stock Image
-            ./patch 2>&1 | grep -aE "kpimg version|no symbol|printk|can.t find|patch done|superkey|relocation|_printk" | head -25 || true
-            if [ -f oImage ]; then
-              echo ">>> oImage: size=$(stat -c%s oImage) KernelPatch=$(grep -a -o KernelPatch oImage | wc -l)"
-            else
-              echo ">>> no oImage produced"
-            fi
-            rm -f oImage patch
+          base=https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download
+          for tag in 0.13.0 0.13.9 0.14.0; do
+            for mode in bare with_kpimg; do
+              echo "===================== $tag / $mode ====================="
+              rm -rf t && mkdir t && cd t
+              curl -sLo patch "$base/$tag/patch_linux" && chmod +x patch
+              [ "$mode" = with_kpimg ] && curl -sLo kpimg "$base/$tag/kpimg"
+              cp ../Image.stock Image
+              ./patch 2>&1 | grep -aiE "version|kpimg|error|fail|done|usage|superkey|not found" | head -20 || true
+              if [ -f oImage ]; then
+                echo ">>> oImage size=$(stat -c%s oImage) KernelPatch=$(grep -a -o KernelPatch oImage | wc -l)"
+                echo ">>> sukisu strings in oImage:"; strings oImage | grep -i sukisu | sort -u | head -15
+                echo ">>> kpm bridge markers:"; strings oImage | grep -iE "supercall|abi_version|kpm_load_module_path|__arm64_sys_truncate" | sort -u | head -10
+              else
+                echo ">>> no oImage produced"; ls -la
+              fi
+              cd ..
+            done
+          done
+
+      - name: Map GKI os_patch_level to 5.15 sub_level
+        run: |
+          for d in 2024-08 2024-11 2025-01; do
+            for r in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              code=$(curl -s -o g.zip -w "%{http_code}" "https://dl.google.com/android/gki/gki-certified-boot-android13-5.15-${d}_r$r.zip")
+              [ "$code" = "200" ] && break
+            done
+            [ "$code" = "200" ] || { echo "$d: not found"; continue; }
+            rm -rf gk && mkdir gk && unzip -o -q g.zip -d gk
+            f=gk/boot.img; [ -f "$f" ] || f=$(ls gk/*.img | head -1)
+            v=$(strings "$f" | grep -m1 -oE "Linux version 5\.15\.[0-9]+[^ ]*")
+            echo "$d (r$r): $v"
           done
