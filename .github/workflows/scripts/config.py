@@ -93,9 +93,10 @@ LEGACY_FIXES = {
     "android12-5.10-below-136": {"url": "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch", "min_sub_level": 136},
 }
 OP8E_PATCH_URL = "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c"
-# 固定为 2026-03-15 的 patch_linux（内置 kpimg 0.13.0）。2026-10-18 起的版本忽略全部参数，
-# 只会注入一个 16 字节、版本号为 0 的空 kpimg，刷入后开机即死
-KPM_PATCH_URL = "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/547ae94b/kpm/patch_linux"
+# SukiSU-Ultra 官方 KernelPatch 发布：0.13.9 起 patch_linux 不再内置 kpimg，裸跑只会注入
+# 一个 16 字节、版本号为 0 的空 kpimg，刷入后开机即死。改用 kptools + 同版本 kpimg 显式修补。
+# 0.14.0 的 kpimg 与 SukiSU builtin 的 ABI v1 桥接配套（需要内核端不早于 6397fcb5）。
+KPM_PATCH_BASE_URL = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.14.0"
 
 
 @dataclass
