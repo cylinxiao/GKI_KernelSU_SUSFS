@@ -213,8 +213,26 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         common_dir = self.work_dir / "common"
         if not common_dir.exists():
             raise RuntimeError("repo sync 失败，common 目录不存在")
+        if self.config.kernel_ref:
+            self._checkout_kernel_ref(common_dir)
         self._apply_legacy_fixes(remote)
         logger.info("=== 内核源代码同步完成 ===")
+
+    def _checkout_kernel_ref(self, common_dir: Path):
+        # 分支最新提交可能和设备内核不同，甚至编译不过（android13-5.15-2024-11 末尾的
+        # 16K 补丁用了 5.15 里不存在的 vm_flags_clear），改为检出设备内核对应的 tag 或提交
+        ref = self.config.kernel_ref
+        fetch_ref = ref if re.fullmatch(r"[0-9a-f]{40}", ref) else f"refs/tags/{ref}"
+        self._chdir(common_dir)
+        remote = self._run_cmd("git remote", capture_output=True).stdout.split()[0]
+        self._run_cmd(f"git fetch --depth=1 {remote} {fetch_ref}", check=True)
+        self._run_cmd("git checkout -q --detach FETCH_HEAD", check=True)
+        head = self._run_cmd("git rev-parse HEAD", capture_output=True).stdout.strip()
+        sublevel = re.search(r"^SUBLEVEL\s*=\s*(\d+)", (common_dir / "Makefile").read_text(), re.M).group(1)
+        self._chdir(self.work_dir)
+        if sublevel != self.config.sub_level:
+            raise RuntimeError(f"{ref} 的 SUBLEVEL 是 {sublevel}，和 sub_level {self.config.sub_level} 不一致")
+        logger.info(f"内核源码已检出 {ref} ({head[:12]})")
 
     def _apply_legacy_fixes(self, remote_branch: str = ""):
         av, kv = self.config.android_version, self.config.kernel_version
@@ -553,6 +571,24 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         with open(config_file, "a") as f:
             f.write("CONFIG_MODULE_SIG_FORCE=n\n")
 
+    def _pin_kernel_release(self, setlocalversion: Path):
+        # 设备版本号里的 -00014-g<hash>-ab<build> 来自 Google 构建系统（完整 git 历史 + BUILD_NUMBER），
+        # 浅克隆编不出来；让 setlocalversion 最后直接输出设备版本号在 x.y.z 之后的部分
+        makefile = (self.work_dir / "common/Makefile").read_text()
+        base = ".".join(re.search(rf"^{key}\s*=\s*(\d+)", makefile, re.M).group(1)
+                        for key in ("VERSION", "PATCHLEVEL", "SUBLEVEL"))
+        release = self.config.kernel_release
+        if not release.startswith(base + "-"):
+            raise RuntimeError(f"kernel_release {release} 和源码版本 {base} 不一致")
+        content = setlocalversion.read_text()
+        marker = 'echo "$res"'
+        pos = content.rfind(marker)
+        if pos < 0:
+            raise RuntimeError("setlocalversion 里找不到 echo \"$res\"")
+        content = content[:pos] + f'echo "{release[len(base):]}"' + content[pos + len(marker):]
+        setlocalversion.write_text(content)
+        logger.info(f"内核版本号固定为 {release}")
+
     def configure_kernel_name(self):
         logger.info("=== 配置内核名称 ===")
         self._chdir(self.work_dir)
@@ -577,6 +613,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 content = content.replace("-dirty", "")
                 with open(setlocalversion, "w") as f:
                     f.write(content)
+            if self.config.kernel_release:
+                self._pin_kernel_release(setlocalversion)
 
         import datetime
         current_time = datetime.datetime.utcnow().strftime("%a %b %d %H:%M:%S UTC %Y")

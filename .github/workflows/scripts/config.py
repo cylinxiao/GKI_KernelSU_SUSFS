@@ -95,7 +95,8 @@ LEGACY_FIXES = {
 OP8E_PATCH_URL = "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c"
 # SukiSU-Ultra 官方 KernelPatch 发布：0.13.9 起 patch_linux 不再内置 kpimg，裸跑只会注入
 # 一个 16 字节、版本号为 0 的空 kpimg，刷入后开机即死。改用 kptools + 同版本 kpimg 显式修补。
-# 0.14.0 的 kpimg 与 SukiSU builtin 的 ABI v1 桥接配套（需要内核端不早于 6397fcb5）。
+# 0.14.0 的 tag 源码是 ABI v1，但 release 里的 kpimg 是 10-26 按 d958d258 重编后覆盖上传的，
+# 实际为 ABI v2，与 SukiSU builtin 的 ABI v2 桥接配套（需要内核端不早于 c02870ac）。
 KPM_PATCH_BASE_URL = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.14.0"
 
 
@@ -117,13 +118,28 @@ class BuildConfig:
     custom_version: Optional[str] = None
     revision: Optional[str] = None
     build_id: Optional[str] = None
+    # 检出设备内核对应的 tag（如 android13-5.15-2024-11_r11）或完整提交，而不是分支最新提交
+    kernel_ref: Optional[str] = None
+    # 设备 uname -r 的完整值，需与 kernel_ref 一起使用，让编出的版本号与设备一致
+    kernel_release: Optional[str] = None
 
     def __post_init__(self):
         self._validate_android_version()
         self._validate_kernel_version()
         self._validate_kernel_android_compat()
         self._validate_sub_level()
+        self._validate_kernel_pin()
         self._set_build_id()
+
+    def _validate_kernel_pin(self):
+        if self.kernel_ref and not re.fullmatch(r"[0-9a-f]{40}|android\d+-\d+\.\d+-\d{4}-\d{2}_r\d+", self.kernel_ref):
+            raise ValueError(f"无效的 kernel_ref: {self.kernel_ref}（应为发布 tag 或 40 位提交）")
+        if not self.kernel_release:
+            return
+        if not self.kernel_ref:
+            raise ValueError("kernel_release 需要和 kernel_ref 一起使用")
+        if not re.fullmatch(rf"{re.escape(self.kernel_version)}\.{self.sub_level}-[A-Za-z0-9._-]+", self.kernel_release):
+            raise ValueError(f"无效的 kernel_release: {self.kernel_release}")
 
     def _validate_android_version(self):
         valid = [v.value for v in AndroidVersion]
@@ -187,6 +203,8 @@ class BuildConfig:
             "custom_version": self.custom_version,
             "revision": self.revision,
             "build_id": self.build_id,
+            "kernel_ref": self.kernel_ref,
+            "kernel_release": self.kernel_release,
         }
 
 
