@@ -270,13 +270,31 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         setup_url = (f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/{self.config.kernelsu_commit}/kernel/setup.sh"
                     if self.config.kernelsu_commit else KSU_REPO_CONFIG["setup_script"])
         self._run_cmd(f"curl -LSs {setup_url} | bash -s builtin", check=False)
-        if self.config.kernelsu_commit:
-            ksu_dir = self.work_dir / "KernelSU"
-            if ksu_dir.exists():
-                self._chdir(ksu_dir)
-                self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=True)
-                self._pin_ksu_version(ksu_dir)
-                self._chdir(self.work_dir)
+        ksu_dir = self.work_dir / "KernelSU"
+        if self.config.kernelsu_commit and ksu_dir.exists():
+            self._chdir(ksu_dir)
+            self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=True)
+            self._pin_ksu_version(ksu_dir)
+            self._chdir(self.work_dir)
+        if ksu_dir.exists():
+            self._annotate_ksu_fallthrough(ksu_dir)
+
+    def _annotate_ksu_fallthrough(self, ksu_dir: Path):
+        # SukiSU 0b666cad 为兼容 4.14 把 fallthrough; 改成了 /* fall through */ 注释，
+        # clang 不认注释，6.1 起 GKI 以 -Werror 编译会报 -Wimplicit-fallthrough。
+        # GKI 内核(5.10+)都有 fallthrough 宏，只改紧挨 case/default 标签前的注释
+        comment = re.compile(r'^([ \t]*)/\*\s*fall[\s-]*through\s*\*/[ \t]*\n(?=(?:[ \t]*\n)*[ \t]*(?:case\b|default\s*:))',
+                             re.M | re.I)
+        total = 0
+        for src in sorted((ksu_dir / "kernel").rglob("*.[ch]")):
+            content = src.read_text(encoding="utf-8")
+            content, n = comment.subn(r'\1fallthrough;\n', content)
+            if n:
+                src.write_text(content, encoding="utf-8")
+                total += n
+                logger.info(f"已把 {src.relative_to(ksu_dir)} 里 {n} 处 fall through 注释改为 fallthrough;")
+        if total == 0:
+            logger.info("KernelSU 源码里没有需要改的 fall through 注释")
 
     def _pin_ksu_version(self, ksu_dir: Path):
         # 内核构建文件默认按 GitHub 上 main 分支的实时提交数/最新 tag 计算版本，改为固定值：
